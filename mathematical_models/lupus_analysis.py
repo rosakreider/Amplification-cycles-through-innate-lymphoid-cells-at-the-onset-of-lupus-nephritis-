@@ -1063,13 +1063,10 @@ class Analysis:
 
     def fig1B(self, data_path: str, figure_format: str = '.pdf'):
         """
-        Generate Figure 1 with side-by-side subplots:
-        (1) Bar plot of proteinuria incidence (%) with absolute counts,
-        (2) Point plot (mean ± SEM) of onset times for proteinuria:
-            - mean = colored point
-            - SEM = black error bars
+        Generate Figure 1B - only left subplot:
+        Bar plot of proteinuria incidence (%) with absolute counts.
         """
-        print("(Analysis) Generating Figure 1 - Experimental proteinuria data.")
+        print("(Analysis) Generating Figure 1B - Experimental proteinuria incidence data.")
 
         # Load and prepare data
         df = pd.read_csv(data_path)
@@ -1103,18 +1100,10 @@ class Analysis:
             percentages.append(percent)
             counts.append((n_positive, n_total))
 
-        # Onset data
-        df_nonzero = df[df['time[weeks]'] > 0].copy()
-        df_nonzero['group'] = pd.Categorical(df_nonzero['group'], categories=group_order, ordered=True)
-        means_onset = df_nonzero.groupby('group')['time[weeks]'].mean().reindex(group_order)
-        print(means_onset)
-        sems_onset = df_nonzero.groupby('group')['time[weeks]'].sem().reindex(group_order)
-        print(sems_onset)
+        # Create figure with only one axis
+        fig, ax1 = plt.subplots(figsize=(5, 4))
 
-        # Create figure
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(5, 4), sharey=False)
-
-        # --- Left: Incidence barplot
+        # Bar plot
         bars = ax1.bar(group_order, percentages, color=colors, alpha=0.7, edgecolor='black', linewidth=2)
         ax1.set_ylabel('proteinuria (%)')
         ax1.set_ylim(0, 100)
@@ -1133,32 +1122,11 @@ class Analysis:
                 fontweight='bold',
                 color='white'
             )
+
         self.format_ax(ax1)
 
-        # --- Right: Onset plot with colored mean, black SEM
-        positions = np.arange(len(group_order))
-
-        for i, group in enumerate(group_order):
-            mean = means_onset[group]
-            sem = sems_onset[group]
-            ax2.errorbar(i, mean, yerr=sem, fmt='o',
-                         color=color_map[group],  # mean point in color
-                         ecolor='black',  # SEM in black
-                         elinewidth=2, capsize=5, markersize=8)
-
-        ax2.set_ylabel('onset proteinuria (weeks)')
-        ax2.set_ylim(19, means_onset.max() + sems_onset.max()+2)
-        ax2.set_xticks(positions)
-        ax2.set_xticklabels(group_order, rotation=90)
-        ax2.margins(x=0.2)  # Add horizontal whitespace like in barplot
-        # Horizontal reference line at y = 1
-        ax2.axhline(y=min(df_nonzero['lifespan[weeks]']), color='grey', linestyle='--', linewidth=1, zorder=3)
-        ax2.axhline(y=max(df_nonzero['lifespan[weeks]']), color='grey', linestyle='--', linewidth=1, zorder=3)
-        #ax2.fill_between(min(df_nonzero['lifespan[weeks]']), max(df_nonzero['lifespan[weeks]']), step="post", alpha=0.2, color='black')
-        self.format_ax(ax2)
-
         plt.tight_layout()
-        plt.savefig(f'results/subfigures/fig1B', dpi=800, bbox_inches='tight')
+        plt.savefig(f'results/subfigures/fig1B{figure_format}', dpi=800, bbox_inches='tight')
         plt.close()
 
     #############
