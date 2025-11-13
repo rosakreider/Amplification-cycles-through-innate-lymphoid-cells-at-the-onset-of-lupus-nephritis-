@@ -20,17 +20,11 @@ The repository consists of two main parts:
     ├── mathematical_models/ # Scripts and notebooks for mathematical modelling
 
         ├── lupus_models.py # Model definitions (ODEs, stochastic processes, etc.)
-
         ├── lupus_params.py # Parameter sets used in simulations
-
         ├── lupus_analysis.py # Analysis and plotting functions
-
         ├── gillespie_simulator.py # Stochastic simulation implementation (Gillespie algorithm)
-
         ├── acute_inflammation_model.py # Supporting model for inflammation dynamics
-
         ├── lupus_plots.py # Main script to run simulations and generate figures
-
         ├── lupus.yml # Conda environment file 
 
     └── README.md # Project description
