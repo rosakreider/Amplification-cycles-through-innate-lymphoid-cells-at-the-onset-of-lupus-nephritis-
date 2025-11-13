@@ -40,37 +40,40 @@ The repository consists of two main parts:
 
 ## Installation - Using Conda
 
+### Step 1: Clone repository
+
 ```bash
 # Clone the repository
 git clone https://github.com/rosakreider/Amplification-cycles-through-innate-lymphoid-cells-at-the-onset-of-lupus-nephritis-.git
 cd Amplification-cycles-through-innate-lymphoid-cells-at-the-onset-of-lupus-nephritis-
+```
 
-# Create and activate the environment
-conda env create -f environment.yml
-conda activate lupus_env
+### Step 2: Install data_analysis
+```bash
+...
+```
+
+
+### Step 3: Install modelling analysis
+
+```bash
+# Create and activate the modelling environment
+conda env create -f lupus.yml
+conda activate lupus
 ```
 ## Usage
-### Run the main simulation
+### Step 1: Run data analysis
+
+Scripts in the data_analysis/ folder perform statistical or exploratory analysis on data produced by the simulations or external datasets:
+```bash
+ ...
+```
+### Step 2: Run modelling analysis
 ```bash
 python lupus_plots.py
 ```
 
-This will execute the main simulation workflow defined in lupus_plots.py, using the model structure and parameters from:
-
-lupus_models.py
-
-lupus_params.py
-
-gillespie_simulator.py
-
 The program outputs simulation results and generates corresponding plots and figures.
-
-### Run data analysis
-
-Scripts in the data_analysis/ folder perform statistical or exploratory analysis on data produced by the simulations or external datasets:
-```bash
-python data_analysis/your_script.py
-```
 
 ## Links
 
