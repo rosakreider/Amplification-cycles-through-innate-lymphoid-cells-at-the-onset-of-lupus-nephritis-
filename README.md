@@ -44,7 +44,8 @@ cd Amplification-cycles-through-innate-lymphoid-cells-at-the-onset-of-lupus-neph
 
 ### Step 2: Install data analysis
 ```bash
-...
+conda env create -f DA_Figure_1.yml
+conda activate Seurat_V4_clone
 ```
 
 
@@ -60,7 +61,7 @@ conda activate lupus
 
 Scripts in the data_analysis/ folder perform statistical or exploratory analysis on data produced by the simulations or external datasets:
 ```bash
- ...
+ Rscript -e "rmarkdown::render('DA_ILC_Figure_1_pipeline_gitlab.Rmd')
 ```
 ### Step 2: Run modelling analysis
 ```bash
