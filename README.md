@@ -48,7 +48,7 @@ git clone https://github.com/rosakreider/Amplification-cycles-through-innate-lym
 cd Amplification-cycles-through-innate-lymphoid-cells-at-the-onset-of-lupus-nephritis-
 ```
 
-### Step 2: Install data_analysis
+### Step 2: Install data analysis
 ```bash
 ...
 ```
