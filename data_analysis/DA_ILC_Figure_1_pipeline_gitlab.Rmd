@@ -1,0 +1,1599 @@
+---
+title: "Amplification cycles through innate lymphoid cells at the onset of lupus nephritis"
+author: "Lisa M. Steinheuer"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+abstract: |
+In autoimmune conditions such as systemic lupus erythematosus, disease progression is highly heterogeneous, and the cellular and molecular mechanisms driving disease-onset dynamics remain incompletely understood. Here, based on quantitative analysis of single-cell transcriptomics data on lupus-prone NZB/W F1 mice, we derived a mathematical cell-cell interaction model recapitulating early dynamics of innate immune cells in lupus nephritis. We identified a diverse landscape of tissue-associated ILC and vessel-associated NK cell populations with varying degree of cytotoxic activity. We conceived a flexible mathematical framework for systematic analysis of immune-cell interaction dynamics, and a specific model implementation considering NKp46+ innate lymphoid cells as amplifiers of inflammatory processes. Systematic model analyses highlight the impact of positive feedback loops and spontaneous inflammatory events or environmental stimuli. Additionally, our analysis reconciles the recently defined critical role of innate lymphoid cells with hallmarks of SLE such as highly heterogeneous onset of disease and the occurrence of autoantibodies in lupus-prone individuals. Our findings provide a foundation towards a mathematical model that takes into account immune-tissue cellular crosstalk, thus allowing to precisely quantitate disease severity and predict response to biologic treatments in autoimmune diseases.
+output:
+bookdown::html_document2:
+toc: true # table of content true
+toc_depth: 5  # upto five depths of headings (specified by #, ## and ###)
+number_sections: true  ## if you want number sections at each table header
+theme: united  # many options for theme, this one is my favorite.
+highlight: tango  # specifies the syntax highlighting style
+---
+
+# ---- 01 Libraries ----
+## Load required R packages for data processing, visualization, and analysis
+### Tools
+
+Used the conda env Seurat_V4_clone
+```bash
+conda env create -f DA_Figure_1.yml
+conda activate Seurat_V4_clone
+```
+
+```{r}
+# ---- Load libraries ----
+library(spatstat.core)
+# ---- Load libraries ----
+library(Seurat)
+# ---- Load libraries ----
+library(SeuratDisk)
+# ---- Load libraries ----
+library(rhdf5)
+# ---- Load libraries ----
+library(tidyverse)
+# ---- Load libraries ----
+library(monocle3)
+# ---- Load libraries ----
+library(terra)
+# ---- Load libraries ----
+library(monocle3)
+# ---- Load libraries ----
+library(SeuratWrappers)
+# ---- Load libraries ----
+library(rstatix)
+# ---- Load libraries ----
+library(magrittr)
+# ---- Load libraries ----
+library(reshape2)
+# ---- Load libraries ----
+library(ggnewscale)
+```
+
+### Functions
+
+```{r}
+custom_theme <- theme_classic() +
+  theme(
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),  # Title
+    axis.title = element_text(size = 10, face = "bold"),               # Axis Titles
+    axis.text = element_text(size = 8),                                # Axis Labels
+    legend.text = element_text(size = 8),
+    legend.title = element_text(size = 10, face = "bold"),
+    strip.text = element_text(size = 10, face = "bold"),               # Facet Labels
+    panel.grid = element_blank()                                       # Remove grid lines (optional)
+  )
+```
+
+# ---- 02 Data Loading ----
+## Import processed Seurat objects or single-cell datasets
+
+### Control samples - Tissue
+
+```{r}
+# reading in the control tissue-associated sample
+
+h5_file <- "~/Downloads/GSM6280142_Control_Ex.h5"
+
+# Extract the barcode index, features, and count matrix
+all_barcodes <- h5read(h5_file, "/barcodes")
+features <- h5read(h5_file, "/features/name")
+# non-unique gene names
+features <- make.unique(features)
+counts <- h5read(h5_file, "/count")
+
+
+# Generate the count matrix
+counts_matrix <- Matrix::sparseMatrix(
+  i = h5read(h5_file, "/feature_idx") + 1,  # Convert to 1-based index
+  j = h5read(h5_file, "/barcode_idx") + 1,  # Convert to 1-based index
+  x = counts,
+  dims = c(length(features), length(all_barcodes))
+)
+
+# add pass-filter information
+barcodes_pass_filter <- h5read(h5_file, "/barcode_info/pass_filter")
+pass_filter_status <- rep(FALSE, length(all_barcodes))
+pass_filter_indices <- barcodes_pass_filter[1,]
+#pass_filter_status[pass_filter_indices] <- TRUE
+
+
+#counts_matrix_filtered <- counts_matrix[,pass_filter_status]
+
+# Create Seurat object
+seurat_tissue_control <- CreateSeuratObject(
+  counts = counts_matrix,
+  assay = "RNA",
+  project = "Control-Tissue",
+  min.cells = 0,
+  min.features = 0
+)
+
+# Assign barcodes and feature names
+rownames(seurat_tissue_control) <- features
+#colnames(seurat_tissue_control) <- all_barcodes[pass_filter_status]
+colnames(seurat_tissue_control) <- all_barcodes
+
+# Check the Seurat object
+seurat_tissue_control
+```
+
+
+
+```{r before-filtering-qc-control, fig.width = 9, fig.height = 4, fig.cap = "Violin plot of basic QC metrics over sequencing samples"}
+
+seurat_tissue_control[["percent.mt"]] <- PercentageFeatureSet(seurat_tissue_control, pattern = "^mt-")
+
+VlnPlot(seurat_tissue_control, group.by = "orig.ident", features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+```
+
+
+```{r subsetting-data-control}
+seurat_tissue_control.filtered <- subset(seurat_tissue_control, subset = nFeature_RNA > 500 &
+  nFeature_RNA < 6000 &
+  percent.mt < 75)
+
+min_cells <- 3
+
+# Filter out genes that are expressed in fewer than min_cells
+seurat_tissue_control.filtered <- subset(seurat_tissue_control.filtered, features = rownames(seurat_tissue_control.filtered)[Matrix::rowSums(seurat_tissue_control.filtered@assays$RNA@layers$counts > 0) >= min_cells])
+
+rm(seurat_tissue_control)
+```
+
+```{r after-filtering-qc-control, fig.width = 12, fig.height = 4, fig.cap = "Violin plot of basic QC metrics over sequencing samples after filtering."}
+VlnPlot(seurat_tissue_control.filtered, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+```{r}
+table(seurat_tissue_control.filtered@meta.data$orig.ident)
+```
+
+#### Normalization & low dimensional embedding of data
+
+```{r norm-control, fig.width = 12, fig.cap = "Overview of variable features."}
+# ---- Preprocessing ----
+seurat_tissue_control.filtered <- NormalizeData(seurat_tissue_control.filtered, normalization.method = "LogNormalize", scale.factor = 10000)
+seurat_tissue_control.filtered <- FindVariableFeatures(seurat_tissue_control.filtered, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(seurat_tissue_control.filtered), 10)
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(seurat_tissue_control.filtered)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+
+cowplot::plot_grid(plot1, plot2, labels = c("A", "B"))
+
+all.genes <- rownames(seurat_tissue_control.filtered)
+seurat_tissue_control.filtered <- ScaleData(seurat_tissue_control.filtered, features = all.genes)
+```
+
+
+```{r pca-control, fig.width = 12, fig.cap = "(A) PCA of sequecing samples, color coded. (B) Elbowplot of variance explained"}
+seurat_tissue_control.filtered <- RunPCA(seurat_tissue_control.filtered, features = VariableFeatures(object = seurat_tissue_control.filtered))
+p1 <- DimPlot(seurat_tissue_control.filtered, reduction = "pca")
+p2 <- ElbowPlot(seurat_tissue_control.filtered, ndims = 40)
+
+cowplot::plot_grid(p1, p2, labels = c("A", "B"))
+```
+
+
+
+```{r umap-calculation-control, fig.width = 12, fig.height = 5, fig.cap = "UMAP of sequencing samples, (A) colored according to sample origin, (B) Seurat cluster"}
+seurat_tissue_control.filtered <- FindNeighbors(seurat_tissue_control.filtered, dims = 1:20)
+seurat_tissue_control.filtered <- FindClusters(seurat_tissue_control.filtered, resolution = 0.5)
+seurat_tissue_control.filtered <- RunUMAP(seurat_tissue_control.filtered, dims = 1:20)
+
+p1 <- DimPlot(object = seurat_tissue_control.filtered,
+              group.by = 'orig.ident')
+p2 <- DimPlot(seurat_tissue_control.filtered, reduction = "umap", label = TRUE, repel = TRUE, group.by = "seurat_clusters")
+
+cowplot::plot_grid(p1, p2, labels = c("A", "B"))
+
+```
+
+
+#### Marker genes
+
+
+
+```{r signatures-control,fig.width = 8, fig.height = 12, fig.cap = "Expression of marker genes within the UMAP embedding"}
+FeaturePlot(seurat_tissue_control.filtered,
+            reduction = "umap",
+            features = c("Eomes", "Klra8", "Zfp683", "Il7r", "Ikzf2"),
+            pt.size = 0.4, ,
+            label = F)
+```
+
+### Disease sample - Tissue
+
+```{r}
+# reading in the control tissue-associated sample
+
+h5_file <- "~/Downloads/GSM6280144_Disease_Ex.h5"
+
+# Extract the barcode index, features, and count matrix
+all_barcodes <- h5read(h5_file, "/barcodes")
+features <- h5read(h5_file, "/features/name")
+# non-unique gene names
+features <- make.unique(features)
+counts <- h5read(h5_file, "/count")
+
+
+# Generate the count matrix
+counts_matrix <- Matrix::sparseMatrix(
+  i = h5read(h5_file, "/feature_idx") + 1,  # Convert to 1-based index
+  j = h5read(h5_file, "/barcode_idx") + 1,  # Convert to 1-based index
+  x = counts,
+  dims = c(length(features), length(all_barcodes))
+)
+
+# add pass-filter information
+barcodes_pass_filter <- h5read(h5_file, "/barcode_info/pass_filter")
+pass_filter_status <- rep(FALSE, length(all_barcodes))
+pass_filter_indices <- barcodes_pass_filter[1,]
+#pass_filter_status[pass_filter_indices] <- TRUE
+
+
+#counts_matrix_filtered <- counts_matrix[,pass_filter_status]
+
+# Create Seurat object
+seurat_tissue_disease <- CreateSeuratObject(
+  counts = counts_matrix,
+  assay = "RNA",
+  project = "Disease-Tissue",
+  min.cells = 0,
+  min.features = 0
+)
+
+# Assign barcodes and feature names
+rownames(seurat_tissue_disease) <- features
+#colnames(seurat_tissue_control) <- all_barcodes[pass_filter_status]
+colnames(seurat_tissue_disease) <- all_barcodes
+
+# Check the Seurat object
+seurat_tissue_disease
+```
+
+```{r before-filtering-qc-disease, fig.width = 9, fig.height = 4, fig.cap = "Violin plot of basic QC metrics over sequencing samples"}
+
+seurat_tissue_disease[["percent.mt"]] <- PercentageFeatureSet(seurat_tissue_disease, pattern = "^mt-")
+
+VlnPlot(seurat_tissue_disease, group.by = "orig.ident", features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+```
+
+
+```{r subsetting-data-disease}
+seurat_tissue_disease.filtered <- subset(seurat_tissue_disease, subset = nFeature_RNA > 500 &
+  nFeature_RNA < 6000 &
+  percent.mt < 75)
+
+min_cells <- 3
+
+# Filter out genes that are expressed in fewer than min_cells
+seurat_tissue_disease.filtered <- subset(seurat_tissue_disease.filtered, features = rownames(seurat_tissue_disease.filtered)[Matrix::rowSums(seurat_tissue_disease.filtered@assays$RNA@layers$counts > 0) >= min_cells])
+
+rm(seurat_tissue_disease)
+```
+
+```{r after-filtering-qc-disease, fig.width = 12, fig.height = 4, fig.cap = "Violin plot of basic QC metrics over sequencing samples after filtering."}
+VlnPlot(seurat_tissue_disease.filtered, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+```{r}
+table(seurat_tissue_disease.filtered@meta.data$orig.ident)
+```
+
+#### Normalization & low dimensional embedding of data
+
+```{r norm-disease, fig.width = 12, fig.cap = "Overview of variable features."}
+# ---- Preprocessing ----
+seurat_tissue_disease.filtered <- NormalizeData(seurat_tissue_disease.filtered, normalization.method = "LogNormalize", scale.factor = 10000)
+seurat_tissue_disease.filtered <- FindVariableFeatures(seurat_tissue_disease.filtered, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(seurat_tissue_disease.filtered), 10)
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(seurat_tissue_disease.filtered)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+
+cowplot::plot_grid(plot1, plot2, labels = c("A", "B"))
+
+all.genes <- rownames(seurat_tissue_disease.filtered)
+seurat_tissue_disease.filtered <- ScaleData(seurat_tissue_disease.filtered, features = all.genes)
+```
+
+
+
+```{r pca-disease, fig.width = 12, fig.cap = "(A) PCA of sequecing samples, color coded. (B) Elbowplot of variance explained"}
+seurat_tissue_disease.filtered <- RunPCA(seurat_tissue_disease.filtered, features = VariableFeatures(object = seurat_tissue_disease.filtered))
+p1 <- DimPlot(seurat_tissue_disease.filtered, reduction = "pca")
+p2 <- ElbowPlot(seurat_tissue_disease.filtered, ndims = 40)
+
+cowplot::plot_grid(p1, p2, labels = c("A", "B"))
+```
+
+
+
+```{r umap-calculation-disease, fig.width = 12, fig.height = 5, fig.cap = "UMAP of sequencing samples, (A) colored according to sample origin, (B) Seurat cluster"}
+seurat_tissue_disease.filtered <- FindNeighbors(seurat_tissue_disease.filtered, dims = 1:20)
+seurat_tissue_disease.filtered <- FindClusters(seurat_tissue_disease.filtered, resolution = 0.5)
+seurat_tissue_disease.filtered <- RunUMAP(seurat_tissue_disease.filtered, dims = 1:20)
+
+p1 <- DimPlot(object = seurat_tissue_disease.filtered,
+              group.by = 'orig.ident')
+p2 <- DimPlot(seurat_tissue_disease.filtered, reduction = "umap", label = TRUE, repel = TRUE, group.by = "seurat_clusters")
+
+cowplot::plot_grid(p1, p2, labels = c("A", "B"))
+
+```
+
+
+
+#### Marker genes
+
+Can we see clustering by cell cycle, or mitochondrial content, or number of expressed genes? <br>
+Therefore, I visualized those metrics in the UMAP embedding.
+
+```{r signatures-disease,fig.width = 8, fig.height = 12, fig.cap = "Expression of marker genes within the UMAP embedding"}
+FeaturePlot(seurat_tissue_disease.filtered,
+            reduction = "umap",
+            features = c("Eomes", "Klra8", "Zfp683", "Il7r", "Ikzf2"),
+            pt.size = 0.4, ,
+            label = F)
+```
+
+
+# ----------------------------------------
+### Control Capillary
+
+```{r}
+# reading in the control tissue-associated sample
+
+h5_file <- "/media/lisbet/IEO_NextSeq/2025_ILC_Berlin/documents-export-2025-11-6/In_control/filtered_feature_bc_matrix.h5"
+
+# Extract the data from the HDF5 file
+barcodes <- h5read(h5_file, "/matrix/barcodes")
+features <- h5read(h5_file, "/matrix/features/id")  # Gene
+gene_names <- h5read(h5_file, "/matrix/features/name")
+indptr <- h5read(h5_file, "/matrix/indptr")         # Pointer to row indices
+indices <- h5read(h5_file, "/matrix/indices")       # Column indices
+data <- h5read(h5_file, "/matrix/data")             # Non-zero values
+shape <- h5read(h5_file, "/matrix/shape")           # Matrix dimensions
+
+# Create a sparse matrix
+count_matrix <- Matrix::sparseMatrix(
+  i = indices + 1,               # Convert to 1-based indexing
+  p = indptr,
+  x = data,
+  dims = c(shape[1], shape[2]),  # Rows = features, Columns = barcodes
+  dimnames = list(gene_names, barcodes)
+)
+
+rownames_count <- rownames(count_matrix)
+colnames_count <- colnames(count_matrix)
+rownames(count_matrix) <- NULL
+colnames(count_matrix) <- NULL
+
+#counts_matrix_filtered <- counts_matrix[,pass_filter_status]
+
+# Create Seurat object
+seurat_cap_control <- CreateSeuratObject(
+  counts = count_matrix,
+  assay = "RNA",
+  project = "Control-Cap",
+  min.cells = 0,
+  min.features = 0
+)
+
+# Assign barcodes and feature names
+rownames(seurat_cap_control) <- make.unique(rownames_count)
+colnames(seurat_cap_control) <- colnames_count
+
+# Check the Seurat object
+seurat_cap_control
+```
+
+
+
+```{r before-filtering-qc-control-cap, fig.width = 9, fig.height = 4, fig.cap = "Violin plot of basic QC metrics over sequencing samples"}
+
+seurat_cap_control[["percent.mt"]] <- PercentageFeatureSet(seurat_cap_control, pattern = "^mt-")
+
+VlnPlot(seurat_cap_control, group.by = "orig.ident", features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+```
+
+
+```{r subsetting-data-control-cap}
+seurat_cap_control.filtered <- subset(seurat_cap_control, subset = nFeature_RNA > 500 &
+  nFeature_RNA < 6000 &
+  percent.mt < 75)
+
+min_cells <- 3
+
+# Filter out genes that are expressed in fewer than min_cells
+seurat_cap_control.filtered <- subset(seurat_cap_control.filtered, features = rownames(seurat_cap_control.filtered)[Matrix::rowSums(seurat_cap_control.filtered@assays$RNA@layers$counts > 0) >= min_cells])
+
+rm(seurat_cap_control)
+```
+
+```{r after-filtering-qc-control-cap, fig.width = 12, fig.height = 4, fig.cap = "Violin plot of basic QC metrics over sequencing samples after filtering."}
+VlnPlot(seurat_cap_control.filtered, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+```{r}
+table(seurat_cap_control.filtered@meta.data$orig.ident)
+```
+
+#### Normalization & low dimensional embedding of data
+
+```{r norm-control-cap, fig.width = 12, fig.cap = "Overview of variable features."}
+# ---- Preprocessing ----
+seurat_cap_control.filtered <- NormalizeData(seurat_cap_control.filtered, normalization.method = "LogNormalize", scale.factor = 10000)
+seurat_cap_control.filtered <- FindVariableFeatures(seurat_cap_control.filtered, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(seurat_cap_control.filtered), 10)
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(seurat_cap_control.filtered)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+
+cowplot::plot_grid(plot1, plot2, labels = c("A", "B"))
+
+all.genes <- rownames(seurat_cap_control.filtered)
+seurat_cap_control.filtered <- ScaleData(seurat_cap_control.filtered, features = all.genes)
+```
+
+
+
+```{r pca-control-cap, fig.width = 12, fig.cap = "(A) PCA of sequecing samples, color coded. (B) Elbowplot of variance explained"}
+seurat_cap_control.filtered <- RunPCA(seurat_cap_control.filtered, features = VariableFeatures(object = seurat_cap_control.filtered))
+p1 <- DimPlot(seurat_cap_control.filtered, reduction = "pca")
+p2 <- ElbowPlot(seurat_cap_control.filtered, ndims = 40)
+
+cowplot::plot_grid(p1, p2, labels = c("A", "B"))
+```
+
+
+
+```{r umap-calculation-control-cap, fig.width = 12, fig.height = 5, fig.cap = "UMAP of sequencing samples, (A) colored according to sample origin, (B) Seurat cluster"}
+seurat_cap_control.filtered <- FindNeighbors(seurat_cap_control.filtered, dims = 1:20)
+seurat_cap_control.filtered <- FindClusters(seurat_cap_control.filtered, resolution = 0.5)
+seurat_cap_control.filtered <- RunUMAP(seurat_cap_control.filtered, dims = 1:20)
+
+p1 <- DimPlot(object = seurat_cap_control.filtered,
+              group.by = 'orig.ident')
+p2 <- DimPlot(seurat_cap_control.filtered, reduction = "umap", label = TRUE, repel = TRUE, group.by = "seurat_clusters")
+
+cowplot::plot_grid(p1, p2, labels = c("A", "B"))
+
+```
+
+
+
+#### Marker genes
+
+
+```{r signatures-control-cap,fig.width = 8, fig.height = 12, fig.cap = "Expression of marker genes within the UMAP embedding"}
+FeaturePlot(seurat_cap_control.filtered,
+            reduction = "umap",
+            features = c("Eomes", "Klra8", "Zfp683", "Il7r", "Ikzf2"),
+            pt.size = 0.4, ,
+            label = F)
+```
+
+```{r signatures-control-cap,fig.width = 8, fig.height = 12, fig.cap = "Expression of marker genes within the UMAP embedding"}
+VlnPlot(seurat_cap_control.filtered,
+        features = c("Eomes", "Klra8", "Zfp683", "Il7r", "Ikzf2"))
+```
+
+
+### Disease Capillary
+
+```{r}
+
+h5_file <- "/media/lisbet/IEO_NextSeq/2025_ILC_Berlin/documents-export-2025-11-6/Disease_In/filtered_feature_bc_matrix.h5"
+
+# Extract the data from the HDF5 file
+barcodes <- h5read(h5_file, "/matrix/barcodes")
+features <- h5read(h5_file, "/matrix/features/id")  # Gene
+gene_names <- h5read(h5_file, "/matrix/features/name")
+indptr <- h5read(h5_file, "/matrix/indptr")         # Pointer to row indices
+indices <- h5read(h5_file, "/matrix/indices")       # Column indices
+data <- h5read(h5_file, "/matrix/data")             # Non-zero values
+shape <- h5read(h5_file, "/matrix/shape")           # Matrix dimensions
+
+# Create a sparse matrix
+count_matrix <- Matrix::sparseMatrix(
+  i = indices + 1,               # Convert to 1-based indexing
+  p = indptr,
+  x = data,
+  dims = c(shape[1], shape[2]),  # Rows = features, Columns = barcodes
+  dimnames = list(gene_names, barcodes)
+)
+
+rownames_count <- rownames(count_matrix)
+colnames_count <- colnames(count_matrix)
+rownames(count_matrix) <- NULL
+colnames(count_matrix) <- NULL
+
+#counts_matrix_filtered <- counts_matrix[,pass_filter_status]
+
+# Create Seurat object
+seurat_cap_disease <- CreateSeuratObject(
+  counts = count_matrix,
+  assay = "RNA",
+  project = "Disease-Cap",
+  min.cells = 0,
+  min.features = 0
+)
+
+# Assign barcodes and feature names
+rownames(seurat_cap_disease) <- make.unique(rownames_count)
+colnames(seurat_cap_disease) <- colnames_count
+
+# Check the Seurat object
+seurat_cap_disease
+```
+
+```{r before-filtering-qc-disease-cap, fig.width = 9, fig.height = 4, fig.cap = "Violin plot of basic QC metrics over sequencing samples"}
+
+seurat_cap_disease[["percent.mt"]] <- PercentageFeatureSet(seurat_cap_disease, pattern = "^mt-")
+
+VlnPlot(seurat_cap_disease, group.by = "orig.ident", features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+```
+
+
+```{r subsetting-data-disease-cap}
+seurat_cap_disease.filtered <- subset(seurat_cap_disease, subset = nFeature_RNA > 500 &
+  nFeature_RNA < 6000 &
+  percent.mt < 75)
+
+min_cells <- 3
+
+# Filter out genes that are expressed in fewer than min_cells
+seurat_cap_disease.filtered <- subset(seurat_cap_disease.filtered, features = rownames(seurat_cap_disease.filtered)[Matrix::rowSums(seurat_cap_disease.filtered@assays$RNA@layers$counts > 0) >= min_cells])
+
+rm(seurat_cap_disease)
+```
+
+```{r after-filtering-qc-disease-cap, fig.width = 12, fig.height = 4, fig.cap = "Violin plot of basic QC metrics over sequencing samples after filtering."}
+VlnPlot(seurat_cap_disease.filtered, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+```{r}
+table(seurat_cap_disease.filtered@meta.data$orig.ident)
+```
+
+#### Normalization & low dimensional embedding of data
+
+```{r norm-disease-cap, fig.width = 12, fig.cap = "Overview of variable features."}
+# ---- Preprocessing ----
+seurat_cap_disease.filtered <- NormalizeData(seurat_cap_disease.filtered, normalization.method = "LogNormalize", scale.factor = 10000)
+seurat_cap_disease.filtered <- FindVariableFeatures(seurat_cap_disease.filtered, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(seurat_cap_disease.filtered), 10)
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(seurat_cap_disease.filtered)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+
+cowplot::plot_grid(plot1, plot2, labels = c("A", "B"))
+
+all.genes <- rownames(seurat_cap_disease.filtered)
+seurat_cap_disease.filtered <- ScaleData(seurat_cap_disease.filtered, features = all.genes)
+```
+
+
+```{r pca-disease-cap, fig.width = 12, fig.cap = "(A) PCA of sequecing samples, color coded. (B) Elbowplot of variance explained"}
+seurat_cap_disease.filtered <- RunPCA(seurat_cap_disease.filtered, features = VariableFeatures(object = seurat_cap_disease.filtered))
+p1 <- DimPlot(seurat_cap_disease.filtered, reduction = "pca")
+p2 <- ElbowPlot(seurat_cap_disease.filtered, ndims = 40)
+
+cowplot::plot_grid(p1, p2, labels = c("A", "B"))
+```
+
+
+```{r umap-calculation-disease-cap, fig.width = 12, fig.height = 5, fig.cap = "UMAP of sequencing samples, (A) colored according to sample origin, (B) Seurat cluster"}
+seurat_cap_disease.filtered <- FindNeighbors(seurat_cap_disease.filtered, dims = 1:20)
+seurat_cap_disease.filtered <- FindClusters(seurat_cap_disease.filtered, resolution = 0.5)
+seurat_cap_disease.filtered <- RunUMAP(seurat_cap_disease.filtered, dims = 1:20)
+
+p1 <- DimPlot(object = seurat_cap_disease.filtered,
+              group.by = 'orig.ident')
+p2 <- DimPlot(seurat_cap_disease.filtered, reduction = "umap", label = TRUE, repel = TRUE, group.by = "seurat_clusters")
+
+cowplot::plot_grid(p1, p2, labels = c("A", "B"))
+
+```
+
+
+
+#### Marker genes
+
+Can we see clustering by cell cycle, or mitochondrial content, or number of expressed genes? <br>
+Therefore, I visualized those metrics in the UMAP embedding.
+
+```{r signatures-disease-cap,fig.width = 8, fig.height = 12, fig.cap = "Expression of marker genes within the UMAP embedding"}
+FeaturePlot(seurat_cap_disease.filtered,
+            reduction = "umap",
+            features = c("Eomes", "Klra8", "Zfp683", "Il7r", "Ikzf2"),
+            pt.size = 0.4, ,
+            label = F)
+```
+
+
+
+# ---- 03 Annotation ----
+## Cell type annotation and metadata organization
+### Integration of all four datasets datasets
+
+```{r int}
+# Liste der Objekte erstellen
+seurat_list <- list(seurat_tissue_disease.filtered, seurat_tissue_control.filtered, seurat_cap_control.filtered, seurat_cap_disease.filtered)
+
+# Ankerpunkte finden
+anchors <- FindIntegrationAnchors(object.list = seurat_list, dims = 1:20)
+
+combined_object <- IntegrateData(anchorset = anchors, dims = 1:20)
+combined_object_int <- combined_object
+rm(seurat_tissue_disease.filtered, seurat_tissue_control.filtered)
+```
+
+```{r low-dim-embedding}
+
+combined_object <- ScaleData(combined_object_int)
+combined_object <- RunPCA(combined_object)
+ElbowPlot(combined_object)
+combined_object <- RunUMAP(combined_object, dims = 1:20)
+
+combined_object <- FindNeighbors(combined_object, dims = 1:20)
+# before 0.5
+combined_object <- FindClusters(combined_object, resolution = 1)
+```
+
+```{r fig.height = 4, fig.width = 11}
+combined_object@meta.data$origin <- ifelse(grepl(pattern = "_1", rownames(combined_object@meta.data)),
+                                           yes = "Disease Tissue",
+                                           ifelse(grepl(pattern = "_2", rownames(combined_object@meta.data)),
+                                                  yes = "Control Tissue",
+                                                  ifelse(grepl(pattern = "_3", rownames(combined_object@meta.data)),
+                                                         yes = "Control Capillary",
+                                                         ifelse(grepl(pattern = "_4", rownames(combined_object@meta.data)),
+                                                                yes = "Disease Capillary",
+                                                                no = NA))))
+
+combined_object@meta.data$Site <- ifelse(grepl(pattern = "Tissue", combined_object@meta.data$origin), yes = "Tissue", ifelse(grepl(pattern = "Capillary", combined_object@meta.data$origin), yes = "Capillary", no = NA))
+combined_object@meta.data$Disease <- ifelse(grepl(pattern = "Disease", combined_object@meta.data$origin), yes = "Disease", ifelse(grepl(pattern = "Control", combined_object@meta.data$origin), yes = "Control", no = NA))
+p1 <- DimPlot(combined_object, reduction = "umap", group.by = "origin")
+p2 <- DimPlot(combined_object, reduction = "umap", group.by = "seurat_clusters", label = T)
+
+p1 + p2
+```
+
+```{r fig.height = 4, fig.width = 11}
+p1 <- DimPlot(combined_object, reduction = "umap", group.by = "Site")
+p2 <- DimPlot(combined_object, reduction = "umap", group.by = "Disease")
+
+p1 + p2
+```
+
+#### Marker genes
+
+```{r fig.width = 6, fig.height = 4}
+p2 <- DotPlot(combined_object, features = c("Zfp683", "Il7r", "Tnfrsf9", "Il2", "Mki67", "Isg15", "Tcf7", "Tigit", "Ccr2", "Gzma"), group.by = "seurat_clusters", assay = "RNA") +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, space = "Lab", na.value = "grey50") +
+  coord_flip() +
+  #scale_y_discrete(limits = rev(levels(combined_object$Celltype))) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),   # Rotate x-axis text
+        axis.text.y = element_text(size = 10),                            # Smaller y-axis text
+        axis.line = element_line(size = 0.85),                            # Thicker axis lines
+        legend.text = element_text(size = 8)                              # Smaller legend text
+  )
+p2
+```
+
+
+```{r fig.width = 8, fig.height = 6}
+DotPlot(combined_object,
+        features = c("Eomes", "Klra8", "Zfp683", "Il7r", "Ikzf2"), assay = "RNA") +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, space = "Lab", na.value = "grey50") +
+  coord_flip()
+```
+
+```{r}
+DimPlot(combined_object, reduction = "umap", group.by = "seurat_clusters", label = T)
+```
+```{r}
+DotPlot(combined_object, features = c("Eomes", "Tcf7", "Tigit", "Ccr2", "Gzma", "Zfp683", "Il7r", "Tnfrsf9", "Il2", "Mki67", "Isg15"), group.by = "seurat_clusters", assay = "RNA") +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, space = "Lab", na.value = "grey50") +
+  coord_flip() +
+  custom_theme +
+  #scale_y_discrete(limits = rev(levels(combined_object$Celltype))) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),   # Rotate x-axis text
+        #axis.text.y = element_text(size = 10),                            # Smaller y-axis text
+        axis.line = element_line(size = 0.85),                            # Thicker axis lines
+        #legend.text = element_text(size = 8)                             # Smaller legend text
+  )
+
+```
+
+#### Annotation
+
+```{r fig.height = 5, fig.width = 7}
+Idents(combined_object) <- "seurat_clusters"
+new.cluster.ids <- c("ILC", "NK", "NK", "NK", "NK", "NK",
+  "NK","ILC",  "NK","ILC", "NK",  "both",
+  "Macrophages", "ILC", "NK", "both", "NK", "nothing", "nothing")
+names(new.cluster.ids) <- levels(combined_object)
+combined_object <- RenameIdents(combined_object, new.cluster.ids)
+
+combined_object <- AddMetaData(object = combined_object, metadata = Idents(combined_object), col.name =
+  'Celltype')
+
+cols_disease_state <- c("Disease" = "#8E8DCB", "Control" = "#66c2a5")
+cols_cells <- c("NK" = "#A70909", "ILC" = "#095AA7", "nothing" = "grey", "both" = "green","Macrophages" = "#2E4A61")
+
+p1 <- DimPlot(object = combined_object,
+              group.by = 'Celltype', label = F, cols = cols_cells)
+
+p1
+```
+
+
+```{r fig.height = 5, fig.width = 7}
+Idents(combined_object) <- "seurat_clusters"
+new.cluster.ids <- c(
+    "ILC Zfp683+",
+    "NK Gzma+ Eomes lo",
+    "NK Tigit+",
+    "NK Gzma+ Eomes hi",
+    "NK Gzma+ Eomes lo",
+    "NK Tcf7+",
+    "NK Ccr2+",
+    "ILC Il7r+ Ccr2+",
+    "NK Tnfrsf9+",
+    "ILC Tnfrsf9+",
+    "NK Tnfrsf9+",
+    "both",
+    "Macrophages",
+    "ILC Il7r+ Isg15+",
+    "NK Mki67+",
+    "both",
+    "NK Mki67++",
+    "nothing",
+    "nothing"
+  )
+names(new.cluster.ids) <- levels(combined_object)
+combined_object <- RenameIdents(combined_object, new.cluster.ids)
+
+combined_object <- AddMetaData(object = combined_object, metadata = Idents(combined_object), col.name =
+  'Subcelltypes')
+celltype_colors <- c(
+  "NK Mki67++" = "#fcae91",                         # Light red
+  "NK Mki67+" = "#fb6a4a",                          # Medium-light red
+  "NK Tnfrsf9+" = "#ef3b2c",                        # Medium red
+  "NK Tcf7+" = "#de2d26",                           # Strong red
+  "NK Ccr2+" = "#cb181d",                           # Darker red
+  "NK Tigit+" = "#a50f15",                          # Dark red
+  "NK Gzma+ Eomes hi" = "#87000d",                    # Very dark red
+  "NK Gzma+ Eomes lo" = "#67000d",                           # Deepest red
+
+  "ILC Zfp683+" = "#c6dbef",                 # Light blue
+  "ILC Il7r+ Ccr2+" = "#9ecae1",                       # Medium-light blue
+  "ILC Tnfrsf9+" = "#6baed6",                          # Medium blue
+  "ILC Il7r+ Isg15+" = "#4292c6",                        # Strong blue
+  "Macrophages" = "#2E4A61",                  # Deep red
+  "nothing" = "#BDBDBD",
+  "both" = "#BDBDBD"                                # Neutral gray
+)
+
+
+combined_object@meta.data$Subcelltypes <- factor(combined_object@meta.data$Subcelltypes,
+                                                 levels = c("NK Mki67++", "NK Mki67+", "NK Tnfrsf9+", "NK Tcf7+", "NK Ccr2+", "NK Tigit+", "NK Gzma+ Eomes hi", "NK Gzma+ Eomes lo",
+                                                            "ILC Zfp683+", "ILC Il7r+ Ccr2+", "ILC Tnfrsf9+", "ILC Il7r+ Isg15+",  "Macrophages", "nothing", "both"))
+
+p1 <- DimPlot(object = combined_object,
+              group.by = 'Subcelltypes', label = F, cols = celltype_colors) + custom_theme
+
+p1
+
+
+combined_object_int <- subset(combined_object, subset = Subcelltypes %in% c("NK Mki67++", "NK Mki67+", "NK Tnfrsf9+", "NK Tcf7+", "NK Ccr2+", "NK Tigit+", "NK Gzma+ Eomes hi", "NK Gzma+ Eomes lo",
+                                                            "ILC Il7r+ Isg15+", "ILC Tnfrsf9+", "ILC Il7r+ Ccr2+", "ILC Zfp683+", "Macrophages"))
+p1 <- DimPlot(object = combined_object_int,
+              group.by = 'Subcelltypes', label = F, cols = celltype_colors) + custom_theme
+
+p1
+
+```
+
+```{r}
+umap_coords <- Embeddings(combined_object_int, "umap")
+
+# Identify outlier cells
+outlier_cells <- rownames(umap_coords)[umap_coords[, "umap_1"] > 11 | umap_coords[, "umap_2"] > 11]
+
+# Subset to remove outliers
+combined_object2 <- subset(combined_object_int, cells = setdiff(Cells(combined_object_int), outlier_cells))
+
+p1 <- DimPlot(object = combined_object2,
+              group.by = 'Subcelltypes', label = F, cols = celltype_colors) + custom_theme
+
+p1
+
+ggsave(plot = p1, filename = "../F_01_C.pdf",
+       width = 3.6, height = 2.3)
+```
+
+```{r fig.height = 5, fig.width = 6}
+p1 <- DimPlot(object = combined_object2,
+              group.by = 'Subcelltypes', label = F, cols = celltype_colors, split.by = "origin", ncol = 2)
+
+p1
+
+```
+
+
+
+```{r fig.width = 6, fig.height = 4}
+p2 <- DotPlot(combined_object2, features = c("Eomes", "Zfp683", "Il7r", "Tnfrsf9", "Mki67", "Isg15", "Tcf7", "Tigit", "Ccr2", "Gzma"), group.by = "Subcelltypes", assay = "RNA") +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, space = "Lab", na.value = "grey50") +
+  coord_flip() +
+  custom_theme +
+  #scale_y_discrete(limits = rev(levels(combined_object$Celltype))) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),   # Rotate x-axis text
+        #axis.text.y = element_text(size = 10),                            # Smaller y-axis text
+        axis.line = element_line(size = 0.85),                            # Thicker axis lines
+        #legend.text = element_text(size = 8)                             # Smaller legend text
+  )
+
+ggsave(plot = p2, filename = "../F_01_D.pdf",
+       width = 4.8, height = 3.25)
+p2
+```
+
+#### Cluster characterization
+
+```{r}
+DefaultAssay(object = combined_object2) <- "RNA"
+
+Idents(combined_object2) <- "Subcelltypes"
+combined_object2 <- JoinLayers(combined_object2)
+DefaultAssay(combined_object2) <- 'RNA'
+
+diff.markers <- FindAllMarkers(combined_object2)
+
+sign_genes <- diff.markers %>%
+ filter(p_val_adj <= 0.1, abs(avg_log2FC) >= 0.25) %>%
+arrange(avg_log2FC) %>%
+ filter(!cluster %in% c("both", "nothing"))
+
+# Select top 10 genes per subcell type
+top10_genes <- sign_genes %>%
+ group_by(cluster) %>%
+ slice_max(order_by = avg_log2FC, n = 10) %>%
+ pull(gene)
+
+#DotPlot
+p1 <- DotPlot(combined_object2, features = top10_genes, group.by = "Subcelltypes") +
+ scale_color_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, space = "Lab", na.value = "grey50") +
+ theme_classic() +
+ coord_flip() +
+ RotatedAxis()
+
+ggsave(plot = p1, filename = "../F_S01_A.pdf",
+      width = 8, height = 20)
+
+
+# # Cytokines from stubbington 2015
+test <- sign_genes %>%
+  filter(gene %in% c("Amh", "Artn", "Bdnf", "Bmp10", "Bmp15", "Bmp2", "Bmp3", "Bmp5", "Bmp6", "Bmp8a", "Bmp8b", "C3",
+                     "Ccbp2", "Ccl1", "Ccl11", "Ccl12", "Ccl17", "Ccl19", "Ccl2", "Ccl20", "Ccl21a", "Ccl21b",
+                     "Ccl21c", "Ccl22", "Ccl24", "Ccl25", "Ccl26", "Ccl27a", "Ccl28", "Ccl3", "Ccl4", "Ccl5",
+                     "Ccl6", "Ccl7", "Ccl8", "Ccl9", "Cga", "Cish", "Cklf", "Clcf1", "Cmtm1", "Cmtm3", "Cmtm4",
+                     "Cmtm5", "Cntf", "Csf1", "Csf2", "Csf3", "Ctf1", "Cx3cl1", "Cxcl1", "Cxcl10", "Cxcl11",
+                     "Cxcl12", "Cxcl13", "Cxcl14", "Cxcl15", "Cxcl16", "Cxcl17", "Cxcl2", "Cxcl3", "Cxcl5",
+                     "Cxcl9", "Cytl1", "Dock2", "Epo", "Fgf1", "Fgf10", "Fgf11", "Fgf12", "Fgf13", "Fgf14",
+                     "Fgf16", "Fgf17", "Fgf18", "Fgf2", "Fgf20", "Fgf21", "Fgf22", "Fgf23", "Fgf3", "Fgf4",
+                     "Fgf5", "Fgf6", "Fgf7", "Fgf8", "Fgf9", "Figf", "Fshb", "Gdf1", "Gdf10", "Gdf11", "Gdf15",
+                     "Gdf2", "Gdf3", "Gdf5", "Gdf6", "Gdf7", "Gdf9", "Gdnf", "Gh", "Gpha2", "Gphb5", "Ifna1",
+                     "Ifna11", "Ifna12", "Ifna13", "Ifna14", "Ifna2", "Ifna4", "Ifna5", "Ifna6", "Ifna7", "Ifna9",
+                     "Ifnab", "Ifnb1", "Ifne", "Ifng", "Ifnk", "Ifnz", "Il10", "Il11", "Il12a", "Il12b", "Il13",
+                     "Il15", "Il16", "Il17a", "Il17b", "Il17c", "Il17d", "Il17f", "Il18", "Il19", "Il1a", "Il1b",
+                     "Il1f10", "Il1f5", "Il1f6", "Il1f8", "Il1f9", "Il1rn", "Il2", "Il20", "Il21", "Il22", "Il23a",
+                     "Il24", "Il25", "Il27", "Il28a", "Il28b", "Il3", "Il31", "Il33", "Il34", "Il4", "Il5", "Il6",
+                     "Il6st", "Il7", "Il9", "Inha", "Inhba", "Inhbb", "Inhbc", "Inhbe", "Kitl", "Lefty1", "Lefty2",
+                     "Lep", "Lhb", "Lif", "Mstn", "Ngf", "Nodal", "Nrtn", "Ntf3", "Ntf5", "Osm", "Pdgfa", "Pdgfb",
+                     "Pdgfc", "Pdgfd", "Pf4", "Pgf", "Pomc", "Ppbp", "Prl", "Pspn", "Socs1", "Socs2", "Socs3",
+                     "Socs4", "Socs5", "Socs6", "Socs7", "Tgfb1", "Tgfb2", "Tgfb3", "Thpo", "Tnf", "Tnfsf10",
+                     "Tnfsf11", "Tnfsf12", "Tnfsf13", "Tnfsf13b", "Tnfsf14", "Tnfsf15", "Tnfsf18", "Tnfsf4",
+                     "Tnfsf8", "Tnfsf9", "Tshb", "Vegfa", "Vegfb", "Vegfc", "Xcl1")
+  ) %>%
+  filter(pct.2 > 0.015 & pct.1 > 0.015)
+
+p2 <- DotPlot(combined_object2, features = unique(test$gene), group.by = "Subcelltypes") +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, space = "Lab", na.value = "grey50") +
+  theme_classic() +
+  coord_flip() +
+  RotatedAxis()
+
+p2
+
+```
+
+#### Cytokine expression
+
+```{r}
+# alternative
+
+genes_ordered_by_function <- c(
+
+
+  # Chemokines & chemoattractants
+  "Xcl1", "Ccl3", "Ccl4",  "Ccl9", "Ccl25", "Cklf",
+
+  # Tumor necrosis factor superfamily ligands (TNFSF)
+  "Tnfsf8", "Tnfsf9", "Tnfsf10", "Tnfsf12", "Tnfsf14",
+
+  # VEGF family (angiogenesis factors)
+  "Vegfa", "Vegfb", "Vegfc", "Pdgfa", "Pdgfb", "Gdf11",
+
+  # Signaling regulators (SOCS family)
+  "Socs1", "Socs2", "Socs3", "Socs5", "Cish",
+
+  # Others involved in signaling/migration
+  "Dock2", "Cmtm3",
+  # Cytokines (other than TNF superfamily)
+  "Il16",  "Clcf1", "Tgfb1", "Osm" ,"Csf2","Csf1",  "Ccl5", "Tnf","Ifng"
+)
+
+subtypes_to_keep <-  c("NK Mki67++", "NK Mki67+", "NK Tnfrsf9+", "NK Tcf7+", "NK Ccr2+", "NK Tigit+", "NK Gzma+ Eomes hi", "NK Gzma+ Eomes lo",
+                                                            "ILC Zfp683+", "ILC Il7r+ Ccr2+", "ILC Tnfrsf9+", "ILC Il7r+ Isg15+", "Macrophages")
+combined_filtered <- subset(combined_object2, subset = Subcelltypes %in% subtypes_to_keep)
+# 3. Create stratification label
+combined_filtered$Group <- paste(
+  combined_filtered$Subcelltypes,
+  combined_filtered$Disease, combined_filtered$Site,
+  sep = "_"
+)
+
+# 4. Set identity to Group
+Idents(combined_filtered) <- "Group"
+
+
+# 5. Get AverageExpression grouped by Subtype+Disease
+avg_expr <- AverageExpression(combined_filtered,
+                              features = genes_ordered_by_function,
+                              group.by = "Group",
+                              return.seurat = FALSE)$RNA
+df_long <- as.matrix(avg_expr) %>%
+  melt() %>%
+  setNames(c("Gene", "Origin", "Expression")) %>%
+  tidyr::extract(
+    col = Origin,
+    into = c("Subcelltype", "Disease", "Site"),
+    regex = "^(.*)-((?:Control|Disease))-(Capillary|Tissue)$"
+  ) %>%
+  mutate(
+    #Subcelltype = str_remove(Subcelltype, "-$"),  # Remove trailing dash
+    Expression = as.numeric(Expression)
+  ) %>%
+  group_by(Gene) %>%
+  mutate(Expression_norm = Expression / max(Expression, na.rm = TRUE)) %>%
+  ungroup()
+# Define your gene order as a factor
+df_long$Gene <- factor(df_long$Gene, levels = genes_ordered_by_function)
+df_long$Subcelltype <- factor(df_long$Subcelltype, levels =  c("NK Mki67++", "NK Mki67+", "NK Tnfrsf9+", "NK Tcf7+", "NK Ccr2+", "NK Tigit+", "NK Gzma+ Eomes hi", "NK Gzma+ Eomes lo",
+                                                            "ILC Zfp683+", "ILC Il7r+ Ccr2+", "ILC Tnfrsf9+", "ILC Il7r+ Isg15+", "Macrophages"))
+
+
+# Plot heatmap with genes ordered by functional similarity
+p1 <- ggplot(df_long, aes(x = Subcelltype, y = Gene, fill = Expression_norm)) +
+  geom_tile(color = "grey80") +
+  scale_fill_gradient(low = "white", high = "#756bb1", na.value = "grey90") +
+  facet_grid( Site ~Disease, scales = "free_x", space = "free_x") +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.spacing = unit(1, "lines")
+  ) +
+  labs(
+    fill = "Normalized Expression",
+    x = "Subcelltype",
+    y = "Gene",
+    title = "Normalized Gene Expression Heatmap Faceted by Site and Disease"
+  )
+
+ggsave(plot = p1, filename = "../F_S01_B.pdf",
+       width = 7, height = 8)
+```
+
+
+# ---- 04 Activation ----
+## Compute activation or module scores across annotated cell types
+
+### ILC activation signature
+
+```{r}
+combined_object2@meta.data$origin <- factor(combined_object2@meta.data$origin, levels = c("Control Tissue", "Disease Tissue", "Control Capillary", "Disease Capillary"))
+#take top 20 from citatation 37
+marker_genes <- c("Ccl4", 'Il2ra', 'Egr1', 'Egr2', 'Ccl3', 'Gadd45b', 'Nfkbid', 'Crtam', 'Tnfsf14', 'Fosb', 'Cd83', 'Tagap', 'Nr4a1', 'Nr4a3', 'Egr3', 'Mir155hg', 'Tnfrsf9', 'Srm', 'Ifng', 'Bcl2l1', "Rsg16", "Xcl1", "Slc7a5", "Nfkbia", "Penk", "Icam1", "Kdm6b", "Zbtb46", "Mett1l", "Phklb1",
+                  "Bcl2a1d", "Ccl9", "Psat1", "Cd69", "Phgdh", "Kdm6bos", "Slc7a1", "Mthfd2", "Cdkn1a", "Trib3", "Gm43305", "Nfkb1", "Tnf", "Clic4", "Pim1", "Hsf2", "Rel", "Tg", "Rrpl2", "Stat5a", "Myo10", "Icam5", "Slc1a4", "Rcl1", "Gpt2", "Nop16", "Shank1", "Ptger4", "Pprc1", "E430024P14Rik", "Nol4l", "Gpatch4", "Ppan", "Alcam", "Nfkbie", "Myc", "Foxj1", "Grwd1", "Lmnb2", "Gas2l3", "Mob3b", "Dot1l", "Nle1", "Traf1", "Mreg", "Hk2", "Nfkb2", "Tsr1", "Hspa9", "Rrs1", "Ipo5", "Utp20", "Shmt2", "Eif4ebp1", "Nfkbiz", "Tfrc", "Ehd1", "Ctps", "Casp4", "Utf1", "Bcl3", "Stx6", "Klf10", "Mybbp1a", "Ltv1", "Irf2bp2", "Bzrap1", "Krs1", "Irf5", "Sdad1", "Kdm2b", "Ipo4", "Pus7", "Cacng8", "Lonp1", "Cluh", "Irf4", "Il21r", "Slc2a6", "Sesn2", "Slc26a10", "Rrp15", "Orm2", "Dph1", "Thop1", "Osgin2", "Rasgrp1", "Slc19a1", "Rcc1", "Mdn1", "Sytl3", "Errfil", "Qrich2", "Trdv5", "Serpine2", "Snhg15", "Gm12397", "Trmt61a")
+DefaultAssay(combined_object2) <- "RNA"
+
+
+marker_genes_data <- intersect(rownames(combined_object2@assays$RNA), marker_genes)
+obj_new <- JoinLayers(combined_object2)
+rna_data <- obj_new@assays$RNA@layers$data
+rownames(rna_data) <- rownames(obj_new@assays$RNA@features)
+gene_expression_percent <- rowSums(rna_data[marker_genes_data,] > 0) / ncol(rna_data)
+filtered_marker_genes <- names(gene_expression_percent[gene_expression_percent >= 0.1])
+
+Marker_list <- list(filtered_marker_genes)
+
+obj_new <- AddModuleScore(object = obj_new, features = Marker_list, name = "Markers_f", assay = "RNA")
+
+threshold_activation <- obj_new@meta.data %>%
+  filter(Celltype == "ILC") %>%
+  summarise(tenp = quantile(Markers_f1, 0.75))
+
+p1 <- VlnPlot(obj_new, features = "Markers_f1", group.by = "Subcelltypes", cols = celltype_colors, pt.size = 0) +
+  ggtitle("NKp46 activation") +
+  theme(axis.text.x = element_text(size = 10),
+        axis.text.y = element_text(size = 10))
+
+p1
+
+```
+
+```{r}
+
+condition_colors <- c(
+  "Disease Tissue" = "#016858",    # Dark blue (disease)
+  "Control Tissue" = "#80cdc1",    # Lighter blue (control)
+  "Disease Capillary" = "#a6611a", # Deep orange-red (disease)
+  "Control Capillary" = "#dfc27d"  # Light orange-red (control)
+)
+
+
+vln_data <- FetchData(obj_new, vars = c("Markers_f1", "Subcelltypes", "origin", "Celltype", "Site")) %>% filter(Celltype == "ILC")
+vln_data %>%
+  group_by(Subcelltypes) %>%
+  summarise(median = median(Markers_f1)) %>%
+  arrange(desc(median))
+
+vln_data <- vln_data %>%
+  mutate(Markers_f1_scaled = scales::rescale(`Markers_f1`, to = c(0, 1)))
+
+# Compute 95% interval
+quantiles <- quantile(vln_data$Markers_f1, probs = c(0.025, 0.975), na.rm = TRUE)
+
+# Filter data within the 95% interval
+vln_data_filtered <- vln_data %>%
+  filter(Markers_f1 >= quantiles[1] & Markers_f1 <= quantiles[2])
+
+# Create ggplot with only the boxplot
+p1 <- ggplot(vln_data_filtered, aes(x = Subcelltypes, y = Markers_f1, fill = origin)) +
+  geom_boxplot(width = 0.7,
+               position = position_dodge(width = 0.9),
+               alpha = 0.8,
+               outlier.shape = NA) +            # removes whiskers
+  ggtitle("ILC Activation per Site") +
+  ylab("Module Score ILC") +
+  facet_wrap(~Site) +  # Split by Site
+  custom_theme +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = condition_colors)
+#geom_hline(yintercept = threshold_activation$tenp, linetype = "dashed", color = "grey") +
+
+p1
+
+ggsave(plot = p1, filename = "../F_01_G_tILC.pdf",
+       width = 4.9, height = 2.8)
+
+
+```
+
+
+### NK activation signature
+
+Nk cell degranulation gene set.
+Source : https://www.gsea-msigdb.org/gsea/msigdb/human/geneset/KEGG_NATURAL_KILLER_CELL_MEDIATED_CYTOTOXICITY.html?utm_source=chatgpt.com
+
+```{r}
+#take top 20 from citatation 37
+marker_genes <- c("Vav3", "Nfat5", "Hcst", "Chp1", "Sh2d1b", "Raet1e", "Csf2", "Raet1l", "Ptk2b",
+                  "Fcer1g", "Fcgr3a", "Fcgr3b", "Klrk1", "Pik3r5", "Fyn", "Shc2", "Ncr3", "Lat",
+                  "Grb2", "Gzmb", "H2-K1", "H2-D1", "H2-Q7", "H2-T23", "H2-Q10", "Hras", "Icam1",
+                  "Icam2", "Ifna1", "Ifna2", "Ifna4", "Ifna5", "Ifna6", "Ifna7", "Ifna8",
+                  "Ifna10", "Ifna13", "Ifna14", "Ifna16", "Ifna17", "Ifna21", "Ifnar1",
+                  "Ifnar2", "Ifnb1", "Ifng", "Ifngr1", "Ifngr2", "Raet1g", "Fas", "Faslg",
+                  "Itgal", "Itgb2", "Araf", "Kir2dl1", "Kir2dl2", "Kir2dl3", "Kir2dl4",
+                  "Kir2ds1", "Kir2ds3", "Kir2ds4", "Kir2ds5", "Kir3dl1", "Kir3dl2", "Klrc1",
+                  "Klrc2", "Klrc3", "Klrd1", "Kras", "Lck", "Lcp2", "Shc4", "Sh2d1a", "Mica",
+                  "Micb", "Nfatc1", "Nfatc2", "Nfatc3", "Nfatc4", "Nras", "Pak1", "Cd244",
+                  "Pik3ca", "Pik3cb", "Pik3cd", "Pik3cg", "Pik3r1", "Pik3r2", "Plcg1", "Shc3",
+                  "Plcg2", "Ppp3ca", "Ppp3cb", "Ppp3cc", "Ppp3r1", "Ppp3r2", "Prf1", "Prkca",
+                  "Prkcb", "Prkcg", "Mapk1", "Mapk3", "Map2k1", "Map2k2", "Kir2dl5a", "Ptpn6",
+                  "Ptpn11", "Rac1", "Rac2", "Rac3", "Raf1", "Bid", "Chp2", "Sh3bp2", "Shc1",
+                  "Sos1", "Sos2", "Braf", "Syk", "Tnf", "Tyrobp", "Vav1", "Vav2", "Zap70",
+                  "Ulbp3", "Ulbp2", "Ulbp1", "Casp3", "Pik3r3", "Tnfsf10", "Tnfrsf10d",
+                  "Tnfrsf10c", "Tnfrsf10b", "Tnfrsf10a", "Cd247", "Ncr2", "Ncr1", "Cd48")
+
+#marker_genes <- c("Gzmb", "Gzma")
+
+
+marker_genes_data <- intersect(rownames(combined_object2@assays$RNA), marker_genes)
+rownames(rna_data) <- rownames(obj_new@assays$RNA@features)
+gene_expression_percent <- rowSums(rna_data[marker_genes_data,] > 0) / ncol(rna_data)
+filtered_marker_genes <- names(gene_expression_percent[gene_expression_percent >= 0.1])
+
+Marker_list <- list(filtered_marker_genes)
+
+#DefaultAssay(combined_object) <- "RNA"
+#marker_genes_data <- intersect(rownames(combined_object@assays$RNA), marker_genes)
+
+#Marker_list <- list(marker_genes_data)
+#obj_new <- JoinLayers(combined_object)
+obj_new <- AddModuleScore(object = obj_new, features = Marker_list, name = "Markers2", assay = "RNA")
+p1 <- VlnPlot(obj_new, features = "Markers21", group.by = "Subcelltypes", pt.size = 0, cols = celltype_colors) +
+  ggtitle("NK activation") +
+  theme(axis.text.x = element_text(size = 10),
+        axis.text.y = element_text(size = 10))
+
+p1
+
+```
+
+```{r}
+vln_data <- FetchData(obj_new, vars = c("Markers21", "Subcelltypes", "origin", "Celltype", "Site")) %>% filter(Celltype == "NK")
+vln_data %>%
+  group_by(Subcelltypes) %>%
+  summarise(median = median(Markers21)) %>%
+  arrange(desc(median))
+
+
+vln_data <- vln_data %>%
+  mutate(Markers21_scaled = scales::rescale(`Markers21`, to = c(0, 1)))
+
+# Compute 95% interval
+quantiles <- quantile(vln_data$Markers21, probs = c(0.025, 0.975), na.rm = TRUE)
+
+# Filter data within the 95% interval
+vln_data_filtered <- vln_data %>%
+  filter(Markers21 >= quantiles[1] & Markers21 <= quantiles[2])
+
+# Create ggplot with only the boxplot
+p1 <- ggplot(vln_data_filtered, aes(x = Subcelltypes, y = Markers21, fill = origin)) +
+  geom_boxplot(width = 0.7,
+               position = position_dodge(width = 0.9),
+               alpha = 0.8,
+               outlier.shape = NA) +            # removes whiskers
+  ggtitle("NK Activation per Site") +
+  ylab("Module Score NK") +
+  facet_wrap(~Site) +  # Split by Site
+  custom_theme +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = condition_colors)
+#geom_hline(yintercept = threshold_activation$tenp, linetype = "dashed", color = "grey") +
+
+p1
+
+ggsave(plot = p1, filename = "../F_01_G_vNK.pdf",
+       width = 5.2, height = 2.9)
+
+
+```
+
+# ---- 05 Differential Abundance ----
+## Perform differential abundance testing between experimental conditions
+
+### Downsample the data
+
+```{r fig.height = 3, fig.width = 10}
+set.seed(123)
+smallest_cluster<- 2018
+barcodes <- combined_object2@meta.data %>%
+  rownames_to_column('Barcodes') %>%
+  group_by(origin) %>%
+  slice_sample(n = smallest_cluster) %>%
+  pull(Barcodes)
+downsampled_sc <- subset(combined_object2, cells = barcodes)
+Idents(downsampled_sc) <- 'seurat_clusters'
+p <- DimPlot(downsampled_sc, reduction = "umap", group.by = "Subcelltypes", split.by = 'origin', label = T)
+```
+
+
+```{r fig.height = 5, fig.width = 6}
+p1 <- DimPlot(object = combined_object2,
+              group.by = 'Subcelltypes', label = F, cols = celltype_colors, split.by = "origin", ncol = 2)
+
+p1
+
+
+```
+
+```{r fig.height = 2.5, fig.width = 8}
+p1 <- combined_object2@meta.data %>%
+  group_by(Subcelltypes, origin) %>%
+  summarise(cell_count = n()) %>%
+  ungroup() %>%
+  ggplot(aes(x = Subcelltypes, y = origin, fill = cell_count)) +
+  geom_tile(color = "white") +  # Heatmap tiles
+  geom_text(aes(label = cell_count), color = "black", size = 3) +  # Cell counts as text
+  scale_fill_gradient(low = "white", high = "red", name = "Cell count") +  # Color gradient based on cell count
+  ylab('Sample') +
+  xlab('Celltype') +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels
+    panel.grid = element_blank(),
+    legend.text = element_text(size = 10),
+    text = element_text(size = 12),
+    legend.title = element_blank()
+  )
+
+p1
+ggsave(plot = p1, filename = "../F_S01_C.pdf",
+       width = 7.3, height = 3.0)
+```
+
+
+
+```{r}
+# alternative representation
+p1 <- downsampled_sc@meta.data %>%
+  filter(Celltype %in% c("ILC", "NK")) %>%
+  group_by(Celltype, origin) %>%
+  summarize(Count = n(), .groups = "drop") %>%
+  group_by(Celltype) %>%
+  mutate(Percent = 100 * Count / sum(Count)) %>% mutate(origin = factor(origin, levels = c("Control Tissue", "Disease Tissue", "Control Capillary", "Disease Capillary"))) %>%
+  ggplot(aes(x = Celltype, y = Percent, fill = origin)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.6), width = 0.5) +
+  scale_fill_manual(values = condition_colors) +
+  theme_classic() +
+  xlab("Cell Type") +
+  ylab("Percentage (%)") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  theme(axis.line = element_line(size = 0.85),
+        legend.text = element_text(size = 8))
+
+# Show the plot
+p1
+
+```
+
+```{r}
+n_iter = 1000
+results <- vector("list", n_iter)
+seeds <- sample.int(1e6, 1000)
+for (i in 1:n_iter) {
+  cat(paste("Iteration", i, "-----\n"))
+   set.seed(seeds[i])
+  barcodes <- combined_object2@meta.data %>%
+    rownames_to_column('Barcodes') %>%
+    group_by(origin) %>%
+    slice_sample(n = 2018) %>%
+    pull(Barcodes)
+
+  downsampled_sc <- subset(combined_object2, cells = barcodes)
+
+  df <- downsampled_sc@meta.data %>%
+    filter(Celltype %in% c("ILC", "NK")) %>%
+    group_by(Celltype, origin) %>%
+    summarize(Count = n(), .groups = "drop") %>%
+    group_by(Celltype) %>%
+    mutate(Percent = 100 * Count / sum(Count))
+
+  df$iteration <- i
+  results[[i]] <- df
+}
+
+
+combined_df <- bind_rows(results)
+
+# Summarize across iterations: mean + SD
+summary_df <- combined_df %>%
+  group_by(Celltype, origin) %>%
+  summarize(mean_percent = mean(Percent),
+            sd_percent = sd(Percent),
+            .groups = "drop") %>%
+  mutate(origin = factor(origin, levels = c("Control Tissue", "Disease Tissue", "Control Capillary", "Disease Capillary")))
+
+
+int <- downsampled_sc@meta.data %>%
+  filter(Celltype %in% c("ILC", "NK")) %>%
+  group_by(Celltype, origin) %>%
+  summarize(Count = n(), .groups = "drop") %>%
+  group_by(Celltype) %>%
+  mutate(Percent = 100 * Count / sum(Count)) %>% mutate(origin = factor(origin, levels = c("Control Tissue", "Disease Tissue", "Control Capillary", "Disease Capillary")))
+
+int$sd_percent <- summary_df$sd_percent
+
+
+p1 <- ggplot(int, aes(x = Celltype, y = Percent, fill = origin)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.6), width = 0.5) +
+  geom_errorbar(aes(ymin = Percent - sd_percent,
+                    ymax = Percent + sd_percent),
+                position = position_dodge(width = 0.6), width = 0.2) +
+  scale_fill_manual(values = condition_colors) +
+  theme_classic() +
+  xlab("Cell Type") +
+  ylab("Percentage (%)") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.line = element_line(size = 0.85),
+        legend.text = element_text(size = 8))
+
+
+p1
+ggsave(plot = p1, filename = "../F_01_E.pdf",
+       width = 3.5, height = 1.7)
+```
+
+#### tissue
+
+```{r}
+observed_counts <- downsampled_sc@meta.data %>%
+  filter(Site == "Tissue") %>%
+  group_by(Subcelltypes, origin) %>%
+  summarize(Count = n(), .groups = "drop") %>%
+  pivot_wider(names_from = origin, values_from = Count, values_fill = 0) %>%
+  mutate(Difference = abs(`Disease Tissue` - `Control Tissue`))  # Assuming origin = Disease/Control
+
+set.seed(123)  # For reproducibility
+n_perm <- 10000
+permuted_differences <- numeric(n_perm)
+
+for (i in 1:n_perm) {
+  # Shuffle origin labels
+  shuffled_meta <- downsampled_sc@meta.data
+  shuffled_meta$origin <- sample(shuffled_meta$origin)
+
+  # Recompute cell counts
+  permuted_counts <- shuffled_meta %>%
+    group_by(Subcelltypes, origin) %>%
+    summarize(Count = n(), .groups = "drop") %>%
+    pivot_wider(names_from = origin, values_from = Count, values_fill = 0) %>%
+    mutate(Difference = abs(`Disease Tissue` - `Control Tissue`))
+
+  # Store max difference across cell types for this permutation
+  permuted_differences[i] <- max(permuted_counts$Difference, na.rm = TRUE)
+}
+
+p_values <- sapply(observed_counts$Difference, function(obs_diff) {
+  mean(permuted_differences >= obs_diff)
+})
+
+# Attach p-values to observed results
+observed_counts$p_value <- p_values
+observed_counts$adj_p_value <- p.adjust(observed_counts$p_value, method = "BH")
+
+# View results
+print(observed_counts)
+
+```
+
+```{r}
+pyramid_data <- downsampled_sc@meta.data %>%
+  filter(Site == "Tissue") %>%
+  filter(Celltype %in% c("NK", "ILC")) %>%
+  group_by(Celltype, origin, Subcelltypes) %>%
+  summarise(Count = n(), .groups = "drop") %>%
+  mutate(Count = ifelse(origin == "Disease Tissue", -Count, Count))  # Flip Disease counts
+
+# Plot age pyramid
+p1 <- ggplot(pyramid_data, aes(x = Count, y = factor(Subcelltypes, levels = rev(c("NK Mki67++", "NK Mki67+", "NK Tnfrsf9+", "NK Tcf7+", "NK Ccr2+", "NK Tigit+", "NK Gzma+ Eomes hi", "NK Gzma+ Eomes lo",
+                                                            "ILC Zfp683+", "ILC Il7r+ Ccr2+", "ILC Tnfrsf9+", "ILC Il7r+ Isg15+"))), fill = origin)) +
+  geom_bar(stat = "identity", width = 0.8) +  # Consistent bar width
+  facet_grid(rows = vars(factor(Celltype, levels = rev(unique(Celltype)))), scales = "free_y", space = "free_y") +  # Fixes spacing issue
+  scale_x_continuous(labels = abs, limits = c(-max(abs(pyramid_data$Count)), max(abs(pyramid_data$Count)))) +
+  scale_fill_manual(values = c(`Control Tissue` = "grey", `Disease Tissue` = "black")) +
+  theme_classic() +
+  labs(title = "NK and ILC Subpopulation Differences",
+       x = "Cell Count",
+       y = "Cell Type",
+       fill = "Condition") +
+  theme(strip.text = element_text(size = 12, face = "bold"),
+        panel.spacing = unit(1, "lines"))  # Adjust space between facets
+
+p1
+
+ggsave(plot = p1, filename = "../F_01_H_tILC.pdf",
+       width = 4.9, height = 2.7)
+```
+
+#### Capillaries
+
+```{r}
+observed_counts <- downsampled_sc@meta.data %>%
+  filter(Site == "Capillary") %>%
+  group_by(Subcelltypes, origin) %>%
+  summarize(Count = n(), .groups = "drop") %>%
+  pivot_wider(names_from = origin, values_from = Count, values_fill = 0) %>%
+  mutate(Difference = abs(`Disease Capillary` - `Control Capillary`))  # Assuming origin = Disease/Control
+
+set.seed(123)  # For reproducibility
+n_perm <- 10000
+permuted_differences <- numeric(n_perm)
+
+for (i in 1:n_perm) {
+  # Shuffle origin labels
+  shuffled_meta <- downsampled_sc@meta.data
+  shuffled_meta$origin <- sample(shuffled_meta$origin)
+
+  # Recompute cell counts
+  permuted_counts <- shuffled_meta %>%
+    group_by(Subcelltypes, origin) %>%
+    summarize(Count = n(), .groups = "drop") %>%
+    pivot_wider(names_from = origin, values_from = Count, values_fill = 0) %>%
+    mutate(Difference = abs(`Disease Tissue` - `Control Tissue`))
+
+  # Store max difference across cell types for this permutation
+  permuted_differences[i] <- max(permuted_counts$Difference, na.rm = TRUE)
+}
+
+p_values <- sapply(observed_counts$Difference, function(obs_diff) {
+  mean(permuted_differences >= obs_diff)
+})
+
+# Attach p-values to observed results
+observed_counts$p_value <- p_values
+observed_counts$adj_p_value <- p.adjust(observed_counts$p_value, method = "BH")
+
+# View results
+print(observed_counts)
+
+```
+
+```{r}
+pyramid_data <- downsampled_sc@meta.data %>%
+  filter(Site == "Capillary") %>%
+  filter(Celltype %in% c("NK", "ILC")) %>%
+  group_by(Celltype, origin, Subcelltypes) %>%
+  summarise(Count = n(), .groups = "drop") %>%
+  mutate(Count = ifelse(origin == "Disease Capillary", -Count, Count))  # Flip Disease counts
+
+# Plot age pyramid
+p1 <- ggplot(pyramid_data, aes(x = Count, y = factor(Subcelltypes, levels = rev(c("NK Mki67++", "NK Mki67+", "NK Tnfrsf9+", "NK Tcf7+", "NK Ccr2+", "NK Tigit+", "NK Gzma+ Eomes hi", "NK Gzma+ Eomes lo",
+                                                            "ILC Zfp683+", "ILC Il7r+ Ccr2+", "ILC Tnfrsf9+", "ILC Il7r+ Isg15+"))), fill = origin)) +
+  geom_bar(stat = "identity", width = 0.8) +  # Consistent bar width
+  facet_grid(rows = vars(factor(Celltype, levels = rev(unique(Celltype)))), scales = "free_y", space = "free_y") +  # Fixes spacing issue
+  scale_x_continuous(labels = abs, limits = c(-max(abs(pyramid_data$Count)), max(abs(pyramid_data$Count)))) +
+  scale_fill_manual(values = c(`Control Capillary` = "grey", `Disease Capillary` = "black")) +
+  theme_classic() +
+  labs(title = "NK and ILC Subpopulation Differences",
+       x = "Cell Count",
+       y = "Cell Type",
+       fill = "Condition") +
+  theme(strip.text = element_text(size = 12, face = "bold"),
+        panel.spacing = unit(1, "lines"))  # Adjust space between facets
+
+p1
+
+ggsave(plot = p1, filename = "../F_01_H_vNK.pdf",
+       width = 5.02, height = 2.7)
+```
+
+
+# ---- 06 Trajectory Analysis ----
+## Conduct pseudotime or trajectory inference using Monocle
+
+```{r}
+
+
+get_earliest_principal_node <- function(cds, time_bin) {
+  cell_ids <- which(colData(cds)[, "Subcelltypes"] == time_bin)
+
+  closest_vertex <-
+    cds@principal_graph_aux[["UMAP"]]$pr_graph_cell_proj_closest_vertex
+  closest_vertex <- as.matrix(closest_vertex[colnames(cds),])
+  root_pr_nodes <-
+    igraph::V(principal_graph(cds)[["UMAP"]])$name[as.numeric(names
+                                                              (which.max(table(closest_vertex[cell_ids,]))))]
+
+  root_pr_nodes
+}
+```
+
+
+### Tissue - ILC
+
+```{r fig.width = 10, fig.height = 4}
+combined_ilc <- subset(downsampled_sc, Celltype == "ILC")
+#combined_ilc@meta.data$Activation <- ifelse(combined_ilc@meta.data$Subcelltypes %in% c("ILC Tnfrsf9+"), yes = "Activated", no = "Unactivated")
+
+combined_ilc_new <- JoinLayers(combined_ilc,assay = "RNA")
+test <- subset(combined_ilc_new, Site == "Tissue")
+
+ilc <- as.cell_data_set(test)
+
+ilc <- cluster_cells(ilc, reduction_method = "UMAP", k = 5)
+
+ilc <- learn_graph(ilc, use_partition = FALSE)
+ilc <- order_cells(ilc, root_pr_nodes = get_earliest_principal_node(ilc, time_bin = "ILC Zfp683+"))
+
+p1 <- plot_cells(ilc, color_cells_by = "Subcelltypes",
+                 label_cell_groups = F,
+                 label_branch_points = FALSE, trajectory_graph_segment_size = 0.85,
+                 graph_label_size = 1.5, cell_size = 0.7, trajectory_graph_color = "black") +
+  scale_color_manual(values = celltype_colors) +
+  custom_theme +
+  theme(axis.line = element_line(size = 0.85), legend.position = "none")
+p2 <- plot_cells(ilc, color_cells_by = "pseudotime", label_branch_points = FALSE, trajectory_graph_segment_size = 0.85,
+                 graph_label_size = 1.5, cell_size = 0.9)
+
+cowplot::plot_grid(p1, p2, labels = c("A", "B"), rel_widths = c(1, 1.2))
+
+ggsave(plot = p1, filename = "../F_01_F_tILC.pdf",
+       width = 1.7, height = 1.62)
+
+
+pseudotime_df <- data.frame(
+  Subcelltype = colData(ilc)$Subcelltypes,  # Subcelltype information
+  Pseudotime = pseudotime(ilc)              # Extract pseudotime values
+)
+
+# Compute mean pseudotime per subcelltype
+mean_pseudotime <- pseudotime_df %>%
+  group_by(Subcelltype) %>%
+  summarize(MeanPseudotime = mean(Pseudotime, na.rm = TRUE)) %>%
+  arrange(MeanPseudotime)  # Arrange for better visualization
+
+# View results
+print(mean_pseudotime)
+```
+
+
+
+### Capillaries - NK cells
+
+```{r fig.width = 10, fig.height = 4}
+combined_nkcells <- subset(downsampled_sc, Celltype == "NK")
+combined_nkcells_new <- JoinLayers(combined_nkcells,assay = "RNA")
+test <- subset(combined_nkcells_new, Site == "Capillary")
+nk <- as.cell_data_set(test)
+nk <- cluster_cells(nk, reduction_method = "UMAP", k = 5)
+
+nk <- learn_graph(nk, use_partition = FALSE)
+nk <- order_cells(nk, root_pr_nodes = get_earliest_principal_node(nk, time_bin = "NK Mki67++"))
+
+p1 <- plot_cells(nk, color_cells_by = "Subcelltypes", label_cell_groups = F,
+                 label_branch_points = FALSE, trajectory_graph_segment_size = 0.85,
+                 graph_label_size = 1.5, cell_size = 0.7, trajectory_graph_color = "black") +
+  scale_color_manual(values = celltype_colors) +
+  custom_theme +
+  theme(axis.line = element_line(size = 0.85), legend.position = "none")
+p2 <- plot_cells(nk, color_cells_by = "pseudotime", label_branch_points = FALSE, trajectory_graph_segment_size = 0.85,
+                 graph_label_size = 1.5, cell_size = 0.9, trajectory_graph_color = "black")
+
+cowplot::plot_grid(p1, p2, labels = c("A", "B"), rel_widths = c(1, 1.2))
+
+ggsave(plot = p1, filename = "../F_01_F_vNK.pdf",
+       width = 1.7, height = 1.62)
+
+
+pseudotime_df <- data.frame(
+  Subcelltype = colData(nk)$Subcelltypes,  # Subcelltype information
+  Pseudotime = pseudotime(nk)              # Extract pseudotime values
+)
+
+# Compute mean pseudotime per subcelltype
+mean_pseudotime <- pseudotime_df %>%
+  group_by(Subcelltype) %>%
+  summarize(MeanPseudotime = mean(Pseudotime, na.rm = TRUE)) %>%
+  arrange(MeanPseudotime)  # Arrange for better visualization
+
+# View results
+print(mean_pseudotime)
+```
+
+
+```{r}
+saveRDS(combined_object2, file = "../SC_PP.rds")
+```
+
+
+# ---- 07 Session Info ----
+## Print reproducibility information
+```{r}
+sessionInfo()
+```

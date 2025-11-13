@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="com.obiscr.chatgpt.settings.EasyCodeState">
+    <option name="projectFiles" value="$PROJECT_DIR$/acute_inflammation_model.py;/run/user/1003/gvfs/smb-share:server=isi1.ukb.uni-bonn.de,share=home/projects/lupus_model/code_modified/gillespie_simulator.py;/run/user/1003/gvfs/smb-share:server=isi1.ukb.uni-bonn.de,share=home/projects/lupus_model/code_modified/hybrid_lupus_model.py;/run/user/1003/gvfs/smb-share:server=isi1.ukb.uni-bonn.de,share=home/projects/lupus_model/code_modified/hybrid_model_analysis.py;/run/user/1003/gvfs/smb-share:server=isi1.ukb.uni-bonn.de,share=home/projects/lupus_model/code_modified/lupus_analysis.py;/run/user/1003/gvfs/smb-share:server=isi1.ukb.uni-bonn.de,share=home/projects/lupus_model/code_modified/lupus_models.py;/run/user/1003/gvfs/smb-share:server=isi1.ukb.uni-bonn.de,share=home/projects/lupus_model/code_modified/lupus_params.py;/run/user/1003/gvfs/smb-share:server=isi1.ukb.uni-bonn.de,share=home/projects/lupus_model/code_modified/lupus_plots.py;/run/user/1003/gvfs/smb-share:server=isi1.ukb.uni-bonn.de,share=home/projects/lupus_model/code_modified/lupus_simulator.py" />
+  </component>
+</project>
